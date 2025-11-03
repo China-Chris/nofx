@@ -1,5 +1,5 @@
 {
-  "admin_mode": true,
+  "admin_mode":true ,
   "leverage": {
     "btc_eth_leverage": 5,
     "altcoin_leverage": 5

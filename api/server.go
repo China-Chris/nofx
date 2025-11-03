@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -131,6 +132,8 @@ func (s *Server) setupRoutes() {
 			protected.GET("/performance", s.handlePerformance)
 		}
 	}
+
+	s.registerSwaggerRoutes()
 }
 
 // handleHealth 健康检查
@@ -633,6 +636,13 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 	}
 
 	tgID := strings.TrimSpace(req.TGID)
+	if tgID == "" {
+		tgID = userID
+	}
+	if tgID != "" && userID != "" && tgID != userID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tg_id与当前用户不匹配"})
+		return
+	}
 
 	// 校验 DeepSeek 配置需要提供 tg_id
 	for modelID, modelData := range req.Models {
@@ -696,6 +706,13 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	}
 
 	tgID := strings.TrimSpace(req.TGID)
+	if tgID == "" {
+		tgID = userID
+	}
+	if tgID != "" && userID != "" && tgID != userID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tg_id与当前用户不匹配"})
+		return
+	}
 
 	// 校验 Hyperliquid 配置需要提供 tg_id
 	for exchangeID, exchangeData := range req.Exchanges {
@@ -1167,10 +1184,34 @@ func (s *Server) handlePerformance(c *gin.Context) {
 // authMiddleware JWT认证中间件
 func (s *Server) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 如果是管理员模式，直接使用admin用户
+		// 如果是管理员模式，允许通过tg_id指示用户
 		if auth.IsAdminMode() {
-			c.Set("user_id", "admin")
-			c.Set("email", "admin@localhost")
+			rawTGID := c.GetHeader("X-Tg-Id")
+			if rawTGID == "" {
+				rawTGID = c.Query("tg_id")
+			}
+
+			tgID, err := normalizeTelegramID(rawTGID)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
+
+			if tgID != "" {
+				if err := s.ensureTelegramUser(tgID); err != nil {
+					log.Printf("❌ 初始化Telegram用户失败: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "初始化用户失败"})
+					c.Abort()
+					return
+				}
+				c.Set("user_id", tgID)
+				c.Set("email", fmt.Sprintf("%s@telegram.local", tgID))
+			} else {
+				c.Set("user_id", "admin")
+				c.Set("email", "admin@localhost")
+			}
+
 			c.Next()
 			return
 		}
@@ -1496,4 +1537,46 @@ func (s *Server) handleGetPromptTemplate(c *gin.Context) {
 		"name":    template.Name,
 		"content": template.Content,
 	})
+}
+
+func (s *Server) ensureTelegramUser(tgID string) error {
+	if tgID == "" {
+		return nil
+	}
+
+	_, err := s.database.GetUserByID(tgID)
+	if err == nil {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	user := &config.User{
+		ID:           tgID,
+		Email:        fmt.Sprintf("%s@telegram.local", tgID),
+		PasswordHash: "",
+		OTPSecret:    "",
+		OTPVerified:  true,
+	}
+
+	if err := s.database.CreateUser(user); err != nil {
+		return err
+	}
+
+	log.Printf("✓ 已为 tg_id=%s 创建用户", tgID)
+	return nil
+}
+
+func normalizeTelegramID(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return "", fmt.Errorf("tg_id只能包含数字")
+		}
+	}
+	return trimmed, nil
 }

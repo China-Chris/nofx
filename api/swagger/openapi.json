@@ -1,0 +1,1306 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "NoFX Trading Bot API",
+    "description": "This document describes the REST API exposed by the NoFX trading bot backend. Most routes under `/api` require a valid JWT bearer token. Public endpoints are marked accordingly.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local development server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "System"
+    },
+    {
+      "name": "Auth"
+    },
+    {
+      "name": "Models"
+    },
+    {
+      "name": "Exchanges"
+    },
+    {
+      "name": "Traders"
+    },
+    {
+      "name": "Signals"
+    },
+    {
+      "name": "Analytics"
+    },
+    {
+      "name": "Prompts"
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Health check",
+        "description": "Public endpoint returning a simple health payload.",
+        "responses": {
+          "200": {
+            "description": "Service healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get system config",
+        "description": "Returns public system configuration such as default coins and leverage presets.",
+        "responses": {
+          "200": {
+            "description": "Config retrieved"
+          }
+        }
+      }
+    },
+    "/api/prompt-templates": {
+      "get": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "List prompt templates",
+        "description": "Public endpoint returning available system prompt template names.",
+        "responses": {
+          "200": {
+            "description": "Template list returned"
+          }
+        }
+      }
+    },
+    "/api/prompt-templates/{name}": {
+      "get": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Get prompt template",
+        "description": "Returns a specific system prompt template by name.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template contents returned"
+          },
+          "404": {
+            "description": "Template not found"
+          }
+        }
+      }
+    },
+    "/api/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Register user",
+        "description": "Creates a new user account and returns OTP configuration info.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registration created"
+          },
+          "409": {
+            "description": "Email already registered"
+          }
+        }
+      }
+    },
+    "/api/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Login",
+        "description": "Authenticates a user and returns a JWT token.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login success"
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        }
+      }
+    },
+    "/api/verify-otp": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Verify OTP",
+        "description": "Validates a one-time password for login.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOTPRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP verified"
+          },
+          "400": {
+            "description": "Verification failed"
+          }
+        }
+      }
+    },
+    "/api/complete-registration": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Complete registration",
+        "description": "Verifies OTP during signup and returns a JWT token.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRegistrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registration completed"
+          },
+          "400": {
+            "description": "OTP invalid"
+          }
+        }
+      }
+    },
+    "/api/supported-models": {
+      "get": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "List supported AI models",
+        "description": "Returns default model metadata.",
+        "responses": {
+          "200": {
+            "description": "List returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AIModelConfig"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models": {
+      "get": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Get user AI model configs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Models returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AIModelConfig"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Update AI model configs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateModelConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update success"
+          }
+        }
+      }
+    },
+    "/api/supported-exchanges": {
+      "get": {
+        "tags": [
+          "Exchanges"
+        ],
+        "summary": "List supported exchanges",
+        "responses": {
+          "200": {
+            "description": "List returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExchangeConfig"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exchanges": {
+      "get": {
+        "tags": [
+          "Exchanges"
+        ],
+        "summary": "Get user exchange configs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configs returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExchangeConfig"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Exchanges"
+        ],
+        "summary": "Update exchange configs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExchangeConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update success"
+          }
+        }
+      }
+    },
+    "/api/traders": {
+      "get": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "List traders",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Traders returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TraderSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Create trader",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTraderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Trader created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTraderResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/traders/{id}/config": {
+      "get": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Get trader configuration",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Config returned"
+          },
+          "404": {
+            "description": "Trader not found"
+          }
+        }
+      }
+    },
+    "/api/traders/{id}": {
+      "put": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Update trader",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTraderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Update success"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Delete trader",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trader deleted"
+          }
+        }
+      }
+    },
+    "/api/traders/{id}/start": {
+      "post": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Start trader",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trader started"
+          }
+        }
+      }
+    },
+    "/api/traders/{id}/stop": {
+      "post": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Stop trader",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trader stopped"
+          }
+        }
+      }
+    },
+    "/api/traders/{id}/prompt": {
+      "put": {
+        "tags": [
+          "Traders"
+        ],
+        "summary": "Update trader prompt",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePromptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prompt updated"
+          }
+        }
+      }
+    },
+    "/api/user/signal-sources": {
+      "get": {
+        "tags": [
+          "Signals"
+        ],
+        "summary": "Get signal source config",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Config returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSignalSource"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Signals"
+        ],
+        "summary": "Save signal source config",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSignalSource"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config saved"
+          }
+        }
+      }
+    },
+    "/api/competition": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Competition overview",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Competition data returned"
+          }
+        }
+      }
+    },
+    "/api/status": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Trader status",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status returned"
+          }
+        }
+      }
+    },
+    "/api/account": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Account information",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Account info returned"
+          }
+        }
+      }
+    },
+    "/api/positions": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Open positions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Positions returned"
+          }
+        }
+      }
+    },
+    "/api/decisions": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Decision history",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decisions returned"
+          }
+        }
+      }
+    },
+    "/api/decisions/latest": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Latest decisions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest decisions returned"
+          }
+        }
+      }
+    },
+    "/api/statistics": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Trader statistics",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Statistics returned"
+          }
+        }
+      }
+    },
+    "/api/equity-history": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Equity history",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "History returned"
+          }
+        }
+      }
+    },
+    "/api/performance": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "AI performance analysis",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "trader_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional trader ID filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Performance returned"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "time": {
+            "type": "string",
+            "description": "Server time (may be null)"
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 6
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "VerifyOTPRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "otp_code"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "otp_code": {
+            "type": "string"
+          }
+        }
+      },
+      "CompleteRegistrationRequest": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "otp_code"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "otp_code": {
+            "type": "string"
+          }
+        }
+      },
+      "AIModelConfig": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "example": "deepseek"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "customApiUrl": {
+            "type": "string"
+          },
+          "customModelName": {
+            "type": "string"
+          }
+        }
+      },
+      "ExchangeConfig": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "binance"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "example": "cex"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "secretKey": {
+            "type": "string"
+          },
+          "testnet": {
+            "type": "boolean"
+          },
+          "hyperliquidWalletAddr": {
+            "type": "string"
+          },
+          "asterUser": {
+            "type": "string"
+          },
+          "asterSigner": {
+            "type": "string"
+          },
+          "asterPrivateKey": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateModelConfigRequest": {
+        "type": "object",
+        "properties": {
+          "tg_id": {
+            "type": "string",
+            "description": "Telegram user id used when syncing DeepSeek credentials"
+          },
+          "models": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelUpdate"
+            }
+          }
+        }
+      },
+      "ModelUpdate": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "api_key": {
+            "type": "string"
+          },
+          "custom_api_url": {
+            "type": "string"
+          },
+          "custom_model_name": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateExchangeConfigRequest": {
+        "type": "object",
+        "properties": {
+          "tg_id": {
+            "type": "string",
+            "description": "Telegram user id used when syncing Hyperliquid credentials"
+          },
+          "exchanges": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExchangeUpdate"
+            }
+          }
+        }
+      },
+      "ExchangeUpdate": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "api_key": {
+            "type": "string"
+          },
+          "secret_key": {
+            "type": "string"
+          },
+          "testnet": {
+            "type": "boolean"
+          },
+          "hyperliquid_wallet_addr": {
+            "type": "string"
+          },
+          "aster_user": {
+            "type": "string"
+          },
+          "aster_signer": {
+            "type": "string"
+          },
+          "aster_private_key": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTraderRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "ai_model_id",
+          "exchange_id",
+          "initial_balance"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "ai_model_id": {
+            "type": "string"
+          },
+          "exchange_id": {
+            "type": "string"
+          },
+          "initial_balance": {
+            "type": "number",
+            "format": "float"
+          },
+          "btc_eth_leverage": {
+            "type": "integer"
+          },
+          "altcoin_leverage": {
+            "type": "integer"
+          },
+          "trading_symbols": {
+            "type": "string",
+            "description": "Comma separated symbols"
+          },
+          "custom_prompt": {
+            "type": "string"
+          },
+          "override_base_prompt": {
+            "type": "boolean"
+          },
+          "system_prompt_template": {
+            "type": "string"
+          },
+          "is_cross_margin": {
+            "type": "boolean"
+          },
+          "use_coin_pool": {
+            "type": "boolean"
+          },
+          "use_oi_top": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateTraderResponse": {
+        "type": "object",
+        "properties": {
+          "trader_id": {
+            "type": "string"
+          },
+          "trader_name": {
+            "type": "string"
+          },
+          "ai_model": {
+            "type": "string"
+          },
+          "is_running": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UpdateTraderRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "ai_model_id",
+          "exchange_id"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "ai_model_id": {
+            "type": "string"
+          },
+          "exchange_id": {
+            "type": "string"
+          },
+          "initial_balance": {
+            "type": "number",
+            "format": "float"
+          },
+          "btc_eth_leverage": {
+            "type": "integer"
+          },
+          "altcoin_leverage": {
+            "type": "integer"
+          },
+          "trading_symbols": {
+            "type": "string"
+          },
+          "custom_prompt": {
+            "type": "string"
+          },
+          "override_base_prompt": {
+            "type": "boolean"
+          },
+          "is_cross_margin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UpdatePromptRequest": {
+        "type": "object",
+        "properties": {
+          "custom_prompt": {
+            "type": "string"
+          },
+          "override_base_prompt": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TraderSummary": {
+        "type": "object",
+        "properties": {
+          "trader_id": {
+            "type": "string"
+          },
+          "trader_name": {
+            "type": "string"
+          },
+          "ai_model": {
+            "type": "string"
+          },
+          "exchange_id": {
+            "type": "string"
+          },
+          "is_running": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserSignalSource": {
+        "type": "object",
+        "properties": {
+          "coin_pool_url": {
+            "type": "string"
+          },
+          "oi_top_url": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
