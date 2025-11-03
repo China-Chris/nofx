@@ -376,6 +376,12 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 	log.Printf("✓ 创建交易员成功: %s (模型: %s, 交易所: %s)", req.Name, req.AIModelID, req.ExchangeID)
 
+	if s.supabaseClient != nil {
+		if err := s.supabaseClient.UpsertUserTrader(c.Request.Context(), userID, trader); err != nil {
+			log.Printf("❌ 同步新交易员到Supabase失败: %v", err)
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"trader_id":   traderID,
 		"trader_name": req.Name,
@@ -478,6 +484,12 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 
 	log.Printf("✓ 更新交易员成功: %s (模型: %s, 交易所: %s)", req.Name, req.AIModelID, req.ExchangeID)
 
+	if s.supabaseClient != nil {
+		if err := s.supabaseClient.UpsertUserTrader(c.Request.Context(), userID, trader); err != nil {
+			log.Printf("❌ 同步更新后的交易员到Supabase失败: %v", err)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"trader_id":   traderID,
 		"trader_name": req.Name,
@@ -504,6 +516,12 @@ func (s *Server) handleDeleteTrader(c *gin.Context) {
 		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
 			trader.Stop()
 			log.Printf("⏹  已停止运行中的交易员: %s", traderID)
+		}
+	}
+
+	if s.supabaseClient != nil {
+		if err := s.supabaseClient.DeleteUserTrader(c.Request.Context(), userID, traderID); err != nil {
+			log.Printf("❌ 从Supabase删除交易员失败: %v", err)
 		}
 	}
 
@@ -678,12 +696,48 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 	}
 
 	log.Printf("✓ AI模型配置已更新: %+v", req.Models)
+
+	if s.supabaseClient != nil && tgID != "" {
+		models, err := s.database.GetAIModels(userID)
+		if err != nil {
+			log.Printf("❌ 获取AI模型用于同步Supabase失败: %v", err)
+		} else {
+			ctx := c.Request.Context()
+			for _, model := range models {
+				if err := s.supabaseClient.UpsertUserAIModel(ctx, tgID, model); err != nil {
+					log.Printf("❌ 同步AI模型到Supabase失败: %v", err)
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "模型配置已更新"})
 }
 
 // handleGetExchangeConfigs 获取交易所配置
 func (s *Server) handleGetExchangeConfigs(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if auth.IsAdminMode() {
+		rawTGID := c.Query("tg_id")
+		if rawTGID == "" {
+			rawTGID = c.Query("tgid")
+		}
+		if rawTGID != "" {
+			tgID, err := normalizeTelegramID(rawTGID)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if tgID != "" {
+				if err := s.ensureTelegramUser(tgID); err != nil {
+					log.Printf("❌ 初始化Telegram用户失败: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "初始化用户失败"})
+					return
+				}
+				userID = tgID
+			}
+		}
+	}
 	log.Printf("🔍 查询用户 %s 的交易所配置", userID)
 	exchanges, err := s.database.GetExchanges(userID)
 	if err != nil {
@@ -748,6 +802,21 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	}
 
 	log.Printf("✓ 交易所配置已更新: %+v", req.Exchanges)
+
+	if s.supabaseClient != nil && tgID != "" {
+		exchanges, err := s.database.GetExchanges(userID)
+		if err != nil {
+			log.Printf("❌ 获取交易所配置用于同步Supabase失败: %v", err)
+		} else {
+			ctx := c.Request.Context()
+			for _, exchange := range exchanges {
+				if err := s.supabaseClient.UpsertUserExchange(ctx, tgID, exchange); err != nil {
+					log.Printf("❌ 同步交易所配置到Supabase失败: %v", err)
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "交易所配置已更新"})
 }
 
@@ -787,6 +856,17 @@ func (s *Server) handleSaveUserSignalSource(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("保存用户信号源配置失败: %v", err)})
 		return
+	}
+
+	if s.supabaseClient != nil {
+		source := &config.UserSignalSource{
+			UserID:      userID,
+			CoinPoolURL: req.CoinPoolURL,
+			OITopURL:    req.OITopURL,
+		}
+		if err := s.supabaseClient.UpsertUserSignalSource(c.Request.Context(), userID, source); err != nil {
+			log.Printf("❌ 同步用户信号源到Supabase失败: %v", err)
+		}
 	}
 
 	log.Printf("✓ 用户信号源配置已保存: user=%s, coin_pool=%s, oi_top=%s", userID, req.CoinPoolURL, req.OITopURL)
@@ -1188,7 +1268,13 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		if auth.IsAdminMode() {
 			rawTGID := c.GetHeader("X-Tg-Id")
 			if rawTGID == "" {
+				rawTGID = c.GetHeader("X-Tgid")
+			}
+			if rawTGID == "" {
 				rawTGID = c.Query("tg_id")
+			}
+			if rawTGID == "" {
+				rawTGID = c.Query("tgid")
 			}
 
 			tgID, err := normalizeTelegramID(rawTGID)

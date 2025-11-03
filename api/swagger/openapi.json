@@ -297,7 +297,17 @@
           "200": {
             "description": "Update success"
           }
-        }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tg_id",
+            "schema": {
+              "type": "string",
+              "description": "Telegram user id (admin mode only). Falls back to X-Tg-Id header."
+            }
+          }
+        ]
       }
     },
     "/api/supported-exchanges": {
@@ -334,6 +344,16 @@
             "bearerAuth": []
           }
         ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tg_id",
+            "schema": {
+              "type": "string",
+              "description": "Telegram user id (admin mode only). Falls back to X-Tg-Id header."
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Configs returned",
@@ -358,6 +378,16 @@
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tg_id",
+            "schema": {
+              "type": "string",
+              "description": "Telegram user id (admin mode only). Falls back to X-Tg-Id header."
+            }
           }
         ],
         "requestBody": {
@@ -435,7 +465,18 @@
               }
             }
           }
-        }
+        },
+        "description": "Creates a new trader for the current user. In admin mode provide tg_id or X-Tg-Id to create on behalf of a Telegram user.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tg_id",
+            "schema": {
+              "type": "string",
+              "description": "Telegram user id (admin mode only). Falls back to X-Tg-Id header."
+            }
+          }
+        ]
       }
     },
     "/api/traders/{id}/config": {
