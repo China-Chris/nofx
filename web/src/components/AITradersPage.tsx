@@ -51,6 +51,12 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     coinPoolUrl: '',
     oiTopUrl: ''
   });
+  const [telegramId, setTelegramId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('telegram_id') || '';
+    }
+    return '';
+  });
 
   const { data: traders, mutate: mutateTraders } = useSWR<TraderInfo[]>(
     'traders',
@@ -89,6 +95,12 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     };
     loadConfigs();
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telegram_id', telegramId);
+    }
+  }, [telegramId]);
 
   // 显示所有用户的模型和交易所配置（用于调试）
   const configuredModels = allModels || [];
@@ -251,7 +263,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         m.id === modelId ? { ...m, apiKey: '', customApiUrl: '', customModelName: '', enabled: false } : m
       ) || [];
 
+      const sanitizedTgId = telegramId.trim();
       const request = {
+        tg_id: sanitizedTgId || undefined,
         models: Object.fromEntries(
           updatedModels.map(model => [
             model.provider, // 使用 provider 而不是 id
@@ -275,7 +289,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     }
   };
 
-  const handleSaveModelConfig = async (modelId: string, apiKey: string, customApiUrl?: string, customModelName?: string) => {
+  const handleSaveModelConfig = async (modelId: string, apiKey: string, customApiUrl?: string, customModelName?: string, tgIdFromModal?: string) => {
     try {
       // 创建或更新用户的模型配置
       const existingModel = allModels?.find(m => m.id === modelId);
@@ -285,6 +299,17 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       const modelToUpdate = existingModel || supportedModels?.find(m => m.id === modelId);
       if (!modelToUpdate) {
         alert(t('modelNotExist', language));
+        return;
+      }
+
+      if (tgIdFromModal && tgIdFromModal !== telegramId) {
+        setTelegramId(tgIdFromModal);
+      }
+
+      const sanitizedTgId = (tgIdFromModal ?? telegramId).trim();
+
+      if (modelToUpdate?.provider === 'deepseek' && !sanitizedTgId) {
+        alert(t('telegramIdRequired', language));
         return;
       }
 
@@ -300,6 +325,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       }
 
       const request = {
+        tg_id: sanitizedTgId || undefined,
         models: Object.fromEntries(
           updatedModels.map(model => [
             model.provider, // 使用 provider 而不是 id
@@ -335,7 +361,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         e.id === exchangeId ? { ...e, apiKey: '', secretKey: '', enabled: false } : e
       ) || [];
       
+      const sanitizedTgId = telegramId.trim();
       const request = {
+        tg_id: sanitizedTgId || undefined,
         exchanges: Object.fromEntries(
           updatedExchanges.map(exchange => [
             exchange.id,
@@ -359,12 +387,22 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     }
   };
 
-  const handleSaveExchangeConfig = async (exchangeId: string, apiKey: string, secretKey?: string, testnet?: boolean, hyperliquidWalletAddr?: string, asterUser?: string, asterSigner?: string, asterPrivateKey?: string) => {
+  const handleSaveExchangeConfig = async (exchangeId: string, apiKey: string, secretKey?: string, testnet?: boolean, hyperliquidWalletAddr?: string, asterUser?: string, asterSigner?: string, asterPrivateKey?: string, tgIdFromModal?: string) => {
     try {
       // 找到要配置的交易所（从supportedExchanges中）
       const exchangeToUpdate = supportedExchanges?.find(e => e.id === exchangeId);
       if (!exchangeToUpdate) {
         alert(t('exchangeNotExist', language));
+        return;
+      }
+
+      if (tgIdFromModal && tgIdFromModal !== telegramId) {
+        setTelegramId(tgIdFromModal);
+      }
+
+      const sanitizedTgId = (tgIdFromModal ?? telegramId).trim();
+      if (exchangeToUpdate.id === 'hyperliquid' && !sanitizedTgId) {
+        alert(t('telegramIdRequired', language));
         return;
       }
 
@@ -404,6 +442,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       }
       
       const request = {
+        tg_id: sanitizedTgId || undefined,
         exchanges: Object.fromEntries(
           updatedExchanges.map(exchange => [
             exchange.id,
@@ -534,6 +573,25 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             <Plus className="w-4 h-4" />
             {t('createTrader', language)}
           </button>
+        </div>
+      </div>
+
+      <div className="binance-card p-4">
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2" style={{ color: '#EAECEF' }}>
+          🤖 {t('telegramId', language)}
+        </h3>
+        <div className="space-y-3">
+          <input
+            type="text"
+            value={telegramId}
+            onChange={(e) => setTelegramId(e.target.value.replace(/\s+/g, ''))}
+            placeholder={t('telegramIdPlaceholder', language)}
+            className="w-full px-3 py-2 rounded"
+            style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}
+          />
+          <div className="text-xs" style={{ color: '#848E9C' }}>
+            {t('telegramIdHelper', language)}
+          </div>
         </div>
       </div>
 
@@ -787,6 +845,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             setEditingModel(null);
           }}
           language={language}
+          telegramId={telegramId}
+          onTelegramIdChange={setTelegramId}
         />
       )}
 
@@ -802,6 +862,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
             setEditingExchange(null);
           }}
           language={language}
+          telegramId={telegramId}
+          onTelegramIdChange={setTelegramId}
         />
       )}
 
@@ -905,7 +967,8 @@ function SignalSourceModal({
             </button>
             <button
               type="submit"
-              className="flex-1 px-4 py-2 rounded text-sm font-semibold"
+              className="flex-1 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50"
+              disabled={!selectedModelId || !apiKey.trim() || (isDeepSeek && !telegramId.trim())}
               style={{ background: '#F0B90B', color: '#000' }}
             >
               {t('save', language)}
@@ -925,15 +988,19 @@ function ModelConfigModal({
   onSave,
   onDelete,
   onClose,
-  language
+  language,
+  telegramId,
+  onTelegramIdChange
 }: {
   allModels: AIModel[];
   configuredModels: AIModel[];
   editingModelId: string | null;
-  onSave: (modelId: string, apiKey: string, baseUrl?: string, modelName?: string) => void;
+  onSave: (modelId: string, apiKey: string, baseUrl?: string, modelName?: string, tgId?: string) => void;
   onDelete: (modelId: string) => void;
   onClose: () => void;
   language: Language;
+  telegramId: string;
+  onTelegramIdChange: (value: string) => void;
 }) {
   const [selectedModelId, setSelectedModelId] = useState(editingModelId || '');
   const [apiKey, setApiKey] = useState('');
@@ -954,11 +1021,19 @@ function ModelConfigModal({
     }
   }, [editingModelId, selectedModel]);
 
+  const isDeepSeek = (selectedModel?.provider || selectedModel?.id || selectedModelId || '').toLowerCase() === 'deepseek';
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedModelId || !apiKey.trim()) return;
 
-    onSave(selectedModelId, apiKey.trim(), baseUrl.trim() || undefined, modelName.trim() || undefined);
+    onSave(
+      selectedModelId,
+      apiKey.trim(),
+      baseUrl.trim() || undefined,
+      modelName.trim() || undefined,
+      telegramId.trim() || undefined,
+    );
   };
 
   // 可选择的模型列表（所有支持的模型）
@@ -1037,6 +1112,24 @@ function ModelConfigModal({
 
           {selectedModel && (
             <>
+              <div>
+                <label className="block text-sm font-semibold mb-2" style={{ color: '#EAECEF' }}>
+                  {t('telegramId', language)}
+                </label>
+                <input
+                  type="text"
+                  value={telegramId}
+                  onChange={(e) => onTelegramIdChange(e.target.value.replace(/\s+/g, ''))}
+                  placeholder={t('telegramIdPlaceholder', language)}
+                  className="w-full px-3 py-2 rounded"
+                  style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}
+                  required={isDeepSeek}
+                />
+                <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
+                  {t('telegramIdHelper', language)}
+                </div>
+              </div>
+
               <div>
                 <label className="block text-sm font-semibold mb-2" style={{ color: '#EAECEF' }}>
                   API Key
@@ -1130,14 +1223,18 @@ function ExchangeConfigModal({
   onSave,
   onDelete,
   onClose,
-  language
+  language,
+  telegramId,
+  onTelegramIdChange
 }: {
   allExchanges: Exchange[];
   editingExchangeId: string | null;
-  onSave: (exchangeId: string, apiKey: string, secretKey?: string, testnet?: boolean, hyperliquidWalletAddr?: string, asterUser?: string, asterSigner?: string, asterPrivateKey?: string) => Promise<void>;
+  onSave: (exchangeId: string, apiKey: string, secretKey?: string, testnet?: boolean, hyperliquidWalletAddr?: string, asterUser?: string, asterSigner?: string, asterPrivateKey?: string, tgId?: string) => Promise<void>;
   onDelete: (exchangeId: string) => void;
   onClose: () => void;
   language: Language;
+  telegramId: string;
+  onTelegramIdChange: (value: string) => void;
 }) {
   const [selectedExchangeId, setSelectedExchangeId] = useState(editingExchangeId || '');
   const [apiKey, setApiKey] = useState('');
@@ -1155,6 +1252,7 @@ function ExchangeConfigModal({
 
   // 获取当前编辑的交易所信息
   const selectedExchange = allExchanges?.find(e => e.id === selectedExchangeId);
+  const isHyperliquid = selectedExchange?.id === 'hyperliquid';
 
   // 如果是编辑现有交易所，初始化表单数据
   useEffect(() => {
@@ -1177,24 +1275,26 @@ function ExchangeConfigModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedExchangeId) return;
+    const sanitizedTelegramId = telegramId.trim();
+    const tgPayload = sanitizedTelegramId || undefined;
     
     // 根据交易所类型验证不同字段
     if (selectedExchange?.id === 'binance') {
       if (!apiKey.trim() || !secretKey.trim()) return;
-      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet);
+      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet, undefined, undefined, undefined, undefined, tgPayload);
     } else if (selectedExchange?.id === 'hyperliquid') {
-      if (!apiKey.trim() || !hyperliquidWalletAddr.trim()) return;
-      await onSave(selectedExchangeId, apiKey.trim(), '', testnet, hyperliquidWalletAddr.trim());
+      if (!apiKey.trim() || !hyperliquidWalletAddr.trim() || !sanitizedTelegramId) return;
+      await onSave(selectedExchangeId, apiKey.trim(), '', testnet, hyperliquidWalletAddr.trim(), undefined, undefined, undefined, tgPayload);
     } else if (selectedExchange?.id === 'aster') {
       if (!asterUser.trim() || !asterSigner.trim() || !asterPrivateKey.trim()) return;
-      await onSave(selectedExchangeId, '', '', testnet, undefined, asterUser.trim(), asterSigner.trim(), asterPrivateKey.trim());
+      await onSave(selectedExchangeId, '', '', testnet, undefined, asterUser.trim(), asterSigner.trim(), asterPrivateKey.trim(), tgPayload);
     } else if (selectedExchange?.id === 'okx') {
       if (!apiKey.trim() || !secretKey.trim() || !passphrase.trim()) return;
-      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet);
+      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet, undefined, undefined, undefined, undefined, tgPayload);
     } else {
       // 默认情况（其他CEX交易所）
       if (!apiKey.trim() || !secretKey.trim()) return;
-      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet);
+      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet, undefined, undefined, undefined, undefined, tgPayload);
     }
   };
 
@@ -1266,6 +1366,24 @@ function ExchangeConfigModal({
 
           {selectedExchange && (
             <>
+              <div>
+                <label className="block text-sm font-semibold mb-2" style={{ color: '#EAECEF' }}>
+                  {t('telegramId', language)}
+                </label>
+                <input
+                  type="text"
+                  value={telegramId}
+                  onChange={(e) => onTelegramIdChange(e.target.value.replace(/\s+/g, ''))}
+                  placeholder={t('telegramIdPlaceholder', language)}
+                  className="w-full px-3 py-2 rounded"
+                  style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}
+                  required={isHyperliquid}
+                />
+                <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
+                  {t('telegramIdHelper', language)}
+                </div>
+              </div>
+
               {/* Binance 和其他 CEX 交易所的字段 */}
               {(selectedExchange.id === 'binance' || selectedExchange.type === 'cex') && selectedExchange.id !== 'hyperliquid' && selectedExchange.id !== 'aster' && (
                 <>
@@ -1453,7 +1571,7 @@ function ExchangeConfigModal({
                 !selectedExchange || 
                 (selectedExchange.id === 'binance' && (!apiKey.trim() || !secretKey.trim())) ||
                 (selectedExchange.id === 'okx' && (!apiKey.trim() || !secretKey.trim() || !passphrase.trim())) ||
-                (selectedExchange.id === 'hyperliquid' && (!apiKey.trim() || !hyperliquidWalletAddr.trim())) ||
+                (selectedExchange.id === 'hyperliquid' && (!apiKey.trim() || !hyperliquidWalletAddr.trim() || !telegramId.trim())) ||
                 (selectedExchange.id === 'aster' && (!asterUser.trim() || !asterSigner.trim() || !asterPrivateKey.trim())) ||
                 (selectedExchange.type === 'cex' && selectedExchange.id !== 'hyperliquid' && selectedExchange.id !== 'aster' && selectedExchange.id !== 'binance' && selectedExchange.id !== 'okx' && (!apiKey.trim() || !secretKey.trim()))
               }

@@ -10,6 +10,7 @@ import (
 	"nofx/manager"
 	"nofx/market"
 	"nofx/pool"
+	"nofx/supabase"
 	"os"
 	"os/signal"
 	"strconv"
@@ -255,8 +256,16 @@ func main() {
 		}
 	}
 
+	// 初始化 Supabase 客户端（可选）
+	supabaseClient, err := supabase.NewClientFromEnv()
+	if err != nil {
+		log.Printf("⚠️  初始化Supabase客户端失败或未配置: %v", err)
+	} else {
+		log.Printf("✓ Supabase客户端已初始化")
+	}
+
 	// 创建并启动API服务器
-	apiServer := api.NewServer(traderManager, database, apiPort)
+	apiServer := api.NewServer(traderManager, database, apiPort, supabaseClient)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("❌ API服务器错误: %v", err)

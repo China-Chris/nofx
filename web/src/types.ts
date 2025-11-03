@@ -137,6 +137,7 @@ export interface CreateTraderRequest {
 }
 
 export interface UpdateModelConfigRequest {
+  tg_id?: string;
   models: {
     [key: string]: {
       enabled: boolean;
@@ -148,6 +149,7 @@ export interface UpdateModelConfigRequest {
 }
 
 export interface UpdateExchangeConfigRequest {
+  tg_id?: string;
   exchanges: {
     [key: string]: {
       enabled: boolean;
