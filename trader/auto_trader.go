@@ -68,11 +68,14 @@ type AutoTraderConfig struct {
 	IsCrossMargin bool // true=全仓模式, false=逐仓模式
 
 	// 币种配置
-	DefaultCoins    []string // 默认币种列表（从数据库获取）
-	TradingCoins    []string // 实际交易币种列表
+	DefaultCoins []string // 默认币种列表（从数据库获取）
+	TradingCoins []string // 实际交易币种列表
 
 	// 系统提示词模板
 	SystemPromptTemplate string // 系统提示词模板名称（如 "default", "aggressive"）
+
+	// 决策报告回调（可选，用于外部系统同步决策记录）
+	DecisionReporter func(*logger.DecisionRecord)
 }
 
 // AutoTrader 自动交易器
@@ -87,9 +90,9 @@ type AutoTrader struct {
 	decisionLogger        *logger.DecisionLogger // 决策日志记录器
 	initialBalance        float64
 	dailyPnL              float64
-	customPrompt          string // 自定义交易策略prompt
-	overrideBasePrompt    bool   // 是否覆盖基础prompt
-	systemPromptTemplate  string // 系统提示词模板名称
+	customPrompt          string   // 自定义交易策略prompt
+	overrideBasePrompt    bool     // 是否覆盖基础prompt
+	systemPromptTemplate  string   // 系统提示词模板名称
 	defaultCoins          []string // 默认币种列表（从数据库获取）
 	tradingCoins          []string // 实际交易币种列表
 	lastResetTime         time.Time
@@ -98,6 +101,8 @@ type AutoTrader struct {
 	startTime             time.Time        // 系统启动时间
 	callCount             int              // AI调用次数
 	positionFirstSeenTime map[string]int64 // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	decisionReporter      func(*logger.DecisionRecord)
+	executionReporter     func(*logger.DecisionAction, *logger.DecisionRecord)
 }
 
 // NewAutoTrader 创建自动交易器
@@ -216,6 +221,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		callCount:             0,
 		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
+		decisionReporter:      config.DecisionReporter,
 	}, nil
 }
 
@@ -431,7 +437,29 @@ func (at *AutoTrader) runCycle() error {
 		log.Printf("⚠ 保存决策记录失败: %v", err)
 	}
 
+	if at.decisionReporter != nil {
+		// 决策记录在 LogDecision 内已补全 CycleNumber/Timestamp，可直接传递
+		at.decisionReporter(record)
+	}
+
+	if at.executionReporter != nil {
+		for i := range record.Decisions {
+			actionCopy := record.Decisions[i]
+			at.executionReporter(&actionCopy, record)
+		}
+	}
+
 	return nil
+}
+
+// SetDecisionReporter 设置决策报告回调
+func (at *AutoTrader) SetDecisionReporter(fn func(*logger.DecisionRecord)) {
+	at.decisionReporter = fn
+}
+
+// SetExecutionReporter 设置单笔执行报告回调
+func (at *AutoTrader) SetExecutionReporter(fn func(*logger.DecisionAction, *logger.DecisionRecord)) {
+	at.executionReporter = fn
 }
 
 // buildTradingContext 构建交易上下文
@@ -1016,7 +1044,7 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 	if len(at.tradingCoins) == 0 {
 		// 使用数据库配置的默认币种列表
 		var candidateCoins []decision.CandidateCoin
-		
+
 		if len(at.defaultCoins) > 0 {
 			// 使用数据库中配置的默认币种
 			for _, coin := range at.defaultCoins {
@@ -1032,7 +1060,7 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 		} else {
 			// 如果数据库中没有配置默认币种，则使用AI500+OI Top作为fallback
 			const ai500Limit = 20 // AI500取前20个评分最高的币种
-			
+
 			mergedPool, err := pool.GetMergedCoinPool(ai500Limit)
 			if err != nil {
 				return nil, fmt.Errorf("获取合并币种池失败: %w", err)
@@ -1073,11 +1101,11 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 func normalizeSymbol(symbol string) string {
 	// 转为大写
 	symbol = strings.ToUpper(strings.TrimSpace(symbol))
-	
+
 	// 确保以USDT结尾
 	if !strings.HasSuffix(symbol, "USDT") {
 		symbol = symbol + "USDT"
 	}
-	
+
 	return symbol
 }

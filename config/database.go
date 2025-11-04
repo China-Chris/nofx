@@ -852,41 +852,181 @@ func (d *Database) DeleteTrader(userID, id string) error {
 
 // GetTraderConfig 获取交易员完整配置（包含AI模型和交易所信息）
 func (d *Database) GetTraderConfig(userID, traderID string) (*TraderRecord, *AIModelConfig, *ExchangeConfig, error) {
-	var trader TraderRecord
-	var aiModel AIModelConfig
-	var exchange ExchangeConfig
+	trader, err := d.fetchTraderRecord("id = ? AND user_id = ?", traderID, userID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return nil, nil, nil, err
+		}
 
+		var candidates []string
+		if extracted := extractTGIDFromSlug(traderID); extracted != "" {
+			candidates = append(candidates, extracted)
+		}
+		if userID != "" && userID != "admin" {
+			candidates = append(candidates, userID)
+		}
+
+		seen := make(map[string]struct{})
+		for _, candidate := range candidates {
+			if candidate == "" {
+				continue
+			}
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			seen[candidate] = struct{}{}
+
+			trader, err = d.fetchTraderRecord("name = ? AND user_id = ?", traderID, candidate)
+			if err == nil {
+				break
+			}
+			if err != sql.ErrNoRows {
+				return nil, nil, nil, err
+			}
+		}
+
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	ownerUserID := trader.UserID
+
+	aiModel, err := d.lookupAIModel(ownerUserID, trader.AIModelID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, nil, nil, err
+	}
+	if aiModel == nil && ownerUserID != "default" {
+		if fallback, ferr := d.lookupAIModel("default", trader.AIModelID); ferr == nil || ferr == sql.ErrNoRows {
+			aiModel = fallback
+		} else {
+			return nil, nil, nil, ferr
+		}
+	}
+
+	exchange, err := d.lookupExchange(ownerUserID, trader.ExchangeID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, nil, nil, err
+	}
+	if exchange == nil && ownerUserID != "default" {
+		if fallback, ferr := d.lookupExchange("default", trader.ExchangeID); ferr == nil || ferr == sql.ErrNoRows {
+			exchange = fallback
+		} else {
+			return nil, nil, nil, ferr
+		}
+	}
+
+	return trader, aiModel, exchange, nil
+}
+
+// lookupAIModel 返回指定用户的AI模型（若不存在返回sql.ErrNoRows）
+func (d *Database) lookupAIModel(userID, modelID string) (*AIModelConfig, error) {
+	if strings.TrimSpace(modelID) == "" {
+		return nil, sql.ErrNoRows
+	}
+
+	var model AIModelConfig
 	err := d.db.QueryRow(`
-		SELECT 
-			t.id, t.user_id, t.name, t.ai_model_id, t.exchange_id, t.initial_balance, t.scan_interval_minutes, t.is_running, t.created_at, t.updated_at,
-			a.id, a.user_id, a.name, a.provider, a.enabled, a.api_key, a.created_at, a.updated_at,
-			e.id, e.user_id, e.name, e.type, e.enabled, e.api_key, e.secret_key, e.testnet,
-			COALESCE(e.hyperliquid_wallet_addr, '') as hyperliquid_wallet_addr,
-			COALESCE(e.aster_user, '') as aster_user,
-			COALESCE(e.aster_signer, '') as aster_signer,
-			COALESCE(e.aster_private_key, '') as aster_private_key,
-			e.created_at, e.updated_at
-		FROM traders t
-		JOIN ai_models a ON t.ai_model_id = a.id AND t.user_id = a.user_id
-		JOIN exchanges e ON t.exchange_id = e.id AND t.user_id = e.user_id
-		WHERE t.id = ? AND t.user_id = ?
-	`, traderID, userID).Scan(
-		&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
-		&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
-		&trader.CreatedAt, &trader.UpdatedAt,
-		&aiModel.ID, &aiModel.UserID, &aiModel.Name, &aiModel.Provider, &aiModel.Enabled, &aiModel.APIKey,
-		&aiModel.CreatedAt, &aiModel.UpdatedAt,
+		SELECT id, user_id, name, provider, enabled, api_key,
+		       COALESCE(custom_api_url, '')   AS custom_api_url,
+		       COALESCE(custom_model_name, '') AS custom_model_name,
+		       created_at, updated_at
+		FROM ai_models
+		WHERE user_id = ? AND (id = ? OR provider = ?)
+		LIMIT 1
+	`, userID, modelID, modelID).Scan(
+		&model.ID, &model.UserID, &model.Name, &model.Provider, &model.Enabled, &model.APIKey,
+		&model.CustomAPIURL, &model.CustomModelName, &model.CreatedAt, &model.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &model, nil
+}
+
+// lookupExchange 返回指定用户的交易所配置（若不存在返回sql.ErrNoRows）
+func (d *Database) lookupExchange(userID, exchangeID string) (*ExchangeConfig, error) {
+	if strings.TrimSpace(exchangeID) == "" {
+		return nil, sql.ErrNoRows
+	}
+
+	var exchange ExchangeConfig
+	err := d.db.QueryRow(`
+		SELECT id, user_id, name, type, enabled, api_key, secret_key, testnet,
+		       COALESCE(hyperliquid_wallet_addr, '') AS hyperliquid_wallet_addr,
+		       COALESCE(aster_user, '')             AS aster_user,
+		       COALESCE(aster_signer, '')           AS aster_signer,
+		       COALESCE(aster_private_key, '')      AS aster_private_key,
+		       created_at, updated_at
+		FROM exchanges
+		WHERE user_id = ? AND id = ?
+		LIMIT 1
+	`, userID, exchangeID).Scan(
 		&exchange.ID, &exchange.UserID, &exchange.Name, &exchange.Type, &exchange.Enabled,
 		&exchange.APIKey, &exchange.SecretKey, &exchange.Testnet,
 		&exchange.HyperliquidWalletAddr, &exchange.AsterUser, &exchange.AsterSigner, &exchange.AsterPrivateKey,
 		&exchange.CreatedAt, &exchange.UpdatedAt,
 	)
-
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
+	}
+	return &exchange, nil
+}
+
+func (d *Database) fetchTraderRecord(where string, args ...interface{}) (*TraderRecord, error) {
+	query := `
+		SELECT 
+			id, user_id, name, ai_model_id, exchange_id,
+			initial_balance, scan_interval_minutes, is_running,
+			COALESCE(btc_eth_leverage, 5)     AS btc_eth_leverage,
+			COALESCE(altcoin_leverage, 5)     AS altcoin_leverage,
+			COALESCE(trading_symbols, '')     AS trading_symbols,
+			COALESCE(use_coin_pool, 0)        AS use_coin_pool,
+			COALESCE(use_oi_top, 0)           AS use_oi_top,
+			COALESCE(use_inside_coins, 0)     AS use_inside_coins,
+			COALESCE(custom_prompt, '')       AS custom_prompt,
+			COALESCE(override_base_prompt, 0) AS override_base_prompt,
+			COALESCE(system_prompt_template, 'default') AS system_prompt_template,
+			COALESCE(is_cross_margin, 1)      AS is_cross_margin,
+			created_at, updated_at
+		FROM traders
+		WHERE ` + where + `
+		LIMIT 1
+	`
+
+	var trader TraderRecord
+	err := d.db.QueryRow(query, args...).Scan(
+		&trader.ID, &trader.UserID, &trader.Name, &trader.AIModelID, &trader.ExchangeID,
+		&trader.InitialBalance, &trader.ScanIntervalMinutes, &trader.IsRunning,
+		&trader.BTCETHLeverage, &trader.AltcoinLeverage, &trader.TradingSymbols,
+		&trader.UseCoinPool, &trader.UseOITop, &trader.UseInsideCoins,
+		&trader.CustomPrompt, &trader.OverrideBasePrompt, &trader.SystemPromptTemplate,
+		&trader.IsCrossMargin, &trader.CreatedAt, &trader.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &trader, nil
+}
+
+func extractTGIDFromSlug(slug string) string {
+	parts := strings.Split(slug, "-")
+	if len(parts) < 2 {
+		return ""
 	}
 
-	return &trader, &aiModel, &exchange, nil
+	candidate := parts[1]
+	if candidate == "" {
+		return ""
+	}
+
+	for _, ch := range candidate {
+		if ch < '0' || ch > '9' {
+			return ""
+		}
+	}
+
+	return candidate
 }
 
 // GetSystemConfig 获取系统配置

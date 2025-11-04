@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -185,7 +186,7 @@ func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, str
 	traderID := c.Query("trader_id")
 
 	// 确保用户的交易员已加载到内存中
-	err := s.traderManager.LoadUserTraders(s.database, userID)
+	err := s.traderManager.LoadUserTraders(s.database, s.supabaseClient, userID)
 	if err != nil {
 		log.Printf("⚠️ 加载用户 %s 的交易员失败: %v", userID, err)
 	}
@@ -198,11 +199,18 @@ func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, str
 		}
 
 		// 获取用户的交易员列表，优先返回用户自己的交易员
-		userTraders, err := s.database.GetTraders(userID)
-		if err == nil && len(userTraders) > 0 {
-			traderID = userTraders[0].ID
-		} else {
-			traderID = ids[0]
+		if s.supabaseClient != nil && userID != "" && userID != "default" {
+			if supaTraders, err := s.supabaseClient.GetUserTraders(c.Request.Context(), userID); err == nil && len(supaTraders) > 0 {
+				traderID = supaTraders[0].ID
+			}
+		}
+
+		if traderID == "" {
+			if userTraders, err := s.database.GetTraders(userID); err == nil && len(userTraders) > 0 {
+				traderID = userTraders[0].ID
+			} else {
+				traderID = ids[0]
+			}
 		}
 	}
 
@@ -271,7 +279,7 @@ type UpdateExchangeConfigRequest struct {
 
 // handleCreateTrader 创建新的AI交易员
 func (s *Server) handleCreateTrader(c *gin.Context) {
-	userID := c.GetString("user_id")
+	userID := s.resolveRequestUserID(c)
 	var req CreateTraderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -368,7 +376,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	}
 
 	// 立即将新交易员加载到TraderManager中
-	err = s.traderManager.LoadUserTraders(s.database, userID)
+	err = s.traderManager.LoadUserTraders(s.database, s.supabaseClient, userID)
 	if err != nil {
 		log.Printf("⚠️ 加载用户交易员到内存失败: %v", err)
 		// 这里不返回错误，因为交易员已经成功创建到数据库
@@ -406,7 +414,7 @@ type UpdateTraderRequest struct {
 
 // handleUpdateTrader 更新交易员配置
 func (s *Server) handleUpdateTrader(c *gin.Context) {
-	userID := c.GetString("user_id")
+	userID := s.resolveRequestUserID(c)
 	traderID := c.Param("id")
 
 	var req UpdateTraderRequest
@@ -477,7 +485,7 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 	}
 
 	// 重新加载交易员到内存
-	err = s.traderManager.LoadUserTraders(s.database, userID)
+	err = s.traderManager.LoadUserTraders(s.database, s.supabaseClient, userID)
 	if err != nil {
 		log.Printf("⚠️ 重新加载用户交易员到内存失败: %v", err)
 	}
@@ -500,40 +508,54 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 
 // handleDeleteTrader 删除交易员
 func (s *Server) handleDeleteTrader(c *gin.Context) {
-	userID := c.GetString("user_id")
-	traderID := c.Param("id")
+	requestUserID := s.resolveRequestUserID(c)
+	identifier := c.Param("id")
 
-	// 从数据库删除
-	err := s.database.DeleteTrader(userID, traderID)
+	canonicalID, err := s.traderManager.ResolveTraderID(identifier)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("删除交易员失败: %v", err)})
-		return
+		canonicalID = identifier
 	}
 
-	// 如果交易员正在运行，先停止它
-	if trader, err := s.traderManager.GetTrader(traderID); err == nil {
-		status := trader.GetStatus()
-		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
-			trader.Stop()
-			log.Printf("⏹  已停止运行中的交易员: %s", traderID)
+	ownerID := s.traderManager.GetTraderOwner(canonicalID)
+	if ownerID == "" {
+		ownerID = requestUserID
+	}
+
+	if err := s.database.DeleteTrader(ownerID, canonicalID); err != nil {
+		if ownerID != requestUserID {
+			if fallbackErr := s.database.DeleteTrader(requestUserID, canonicalID); fallbackErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("删除交易员失败: %v", err)})
+				return
+			}
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("删除交易员失败: %v", err)})
+			return
 		}
 	}
 
-	if s.supabaseClient != nil {
-		if err := s.supabaseClient.DeleteUserTrader(c.Request.Context(), userID, traderID); err != nil {
+	if trader, _, err := s.traderManager.GetTraderWithID(identifier); err == nil {
+		status := trader.GetStatus()
+		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
+			trader.Stop()
+			log.Printf("⏹  已停止运行中的交易员: %s", canonicalID)
+		}
+	}
+
+	if s.supabaseClient != nil && ownerID != "" {
+		if err := s.supabaseClient.DeleteUserTrader(c.Request.Context(), ownerID, canonicalID); err != nil {
 			log.Printf("❌ 从Supabase删除交易员失败: %v", err)
 		}
 	}
 
-	log.Printf("✓ 交易员已删除: %s", traderID)
+	log.Printf("✓ 交易员已删除: %s", canonicalID)
 	c.JSON(http.StatusOK, gin.H{"message": "交易员已删除"})
 }
 
 // handleStartTrader 启动交易员
 func (s *Server) handleStartTrader(c *gin.Context) {
-	traderID := c.Param("id")
+	identifier := c.Param("id")
 
-	trader, err := s.traderManager.GetTrader(traderID)
+	trader, canonicalID, err := s.traderManager.GetTraderWithID(identifier)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "交易员不存在"})
 		return
@@ -548,17 +570,40 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 
 	// 启动交易员
 	go func() {
-		log.Printf("▶️  启动交易员 %s (%s)", traderID, trader.GetName())
+		log.Printf("▶️  启动交易员 %s (%s)", canonicalID, trader.GetName())
 		if err := trader.Run(); err != nil {
 			log.Printf("❌ 交易员 %s 运行错误: %v", trader.GetName(), err)
 		}
 	}()
 
 	// 更新数据库中的运行状态
-	userID := c.GetString("user_id")
-	err = s.database.UpdateTraderStatus(userID, traderID, true)
-	if err != nil {
-		log.Printf("⚠️  更新交易员状态失败: %v", err)
+	requestUserID := c.GetString("user_id")
+	ownerID := s.traderManager.GetTraderOwner(canonicalID)
+	if ownerID == "" {
+		ownerID = requestUserID
+	}
+
+	if err := s.database.UpdateTraderStatus(ownerID, canonicalID, true); err != nil {
+		if ownerID != requestUserID {
+			if fallbackErr := s.database.UpdateTraderStatus(requestUserID, canonicalID, true); fallbackErr != nil {
+				log.Printf("⚠️  更新交易员状态失败: %v", err)
+			}
+		} else {
+			log.Printf("⚠️  更新交易员状态失败: %v", err)
+		}
+	}
+
+	s.traderManager.SetTraderRunning(canonicalID, true)
+
+	if s.supabaseClient != nil && ownerID != "" && ownerID != "default" {
+		if cfg := s.traderManager.GetTraderConfig(canonicalID); cfg != nil {
+			cfg.IsRunning = true
+			go func(owner string, record *config.TraderRecord) {
+				if err := s.supabaseClient.UpsertUserTrader(context.Background(), owner, record); err != nil {
+					log.Printf("❌ 同步交易员运行状态到Supabase失败: %v", err)
+				}
+			}(ownerID, cfg)
+		}
 	}
 
 	log.Printf("✓ 交易员 %s 已启动", trader.GetName())
@@ -567,9 +612,9 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 
 // handleStopTrader 停止交易员
 func (s *Server) handleStopTrader(c *gin.Context) {
-	traderID := c.Param("id")
+	identifier := c.Param("id")
 
-	trader, err := s.traderManager.GetTrader(traderID)
+	trader, canonicalID, err := s.traderManager.GetTraderWithID(identifier)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "交易员不存在"})
 		return
@@ -585,11 +630,33 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 	// 停止交易员
 	trader.Stop()
 
-	// 更新数据库中的运行状态
-	userID := c.GetString("user_id")
-	err = s.database.UpdateTraderStatus(userID, traderID, false)
-	if err != nil {
-		log.Printf("⚠️  更新交易员状态失败: %v", err)
+	requestUserID := c.GetString("user_id")
+	ownerID := s.traderManager.GetTraderOwner(canonicalID)
+	if ownerID == "" {
+		ownerID = requestUserID
+	}
+
+	if err := s.database.UpdateTraderStatus(ownerID, canonicalID, false); err != nil {
+		if ownerID != requestUserID {
+			if fallbackErr := s.database.UpdateTraderStatus(requestUserID, canonicalID, false); fallbackErr != nil {
+				log.Printf("⚠️  更新交易员状态失败: %v", err)
+			}
+		} else {
+			log.Printf("⚠️  更新交易员状态失败: %v", err)
+		}
+	}
+
+	s.traderManager.SetTraderRunning(canonicalID, false)
+
+	if s.supabaseClient != nil && ownerID != "" && ownerID != "default" {
+		if cfg := s.traderManager.GetTraderConfig(canonicalID); cfg != nil {
+			cfg.IsRunning = false
+			go func(owner string, record *config.TraderRecord) {
+				if err := s.supabaseClient.UpsertUserTrader(context.Background(), owner, record); err != nil {
+					log.Printf("❌ 同步交易员运行状态到Supabase失败: %v", err)
+				}
+			}(ownerID, cfg)
+		}
 	}
 
 	log.Printf("⏹  交易员 %s 已停止", trader.GetName())
@@ -598,8 +665,8 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 
 // handleUpdateTraderPrompt 更新交易员自定义Prompt
 func (s *Server) handleUpdateTraderPrompt(c *gin.Context) {
-	traderID := c.Param("id")
-	userID := c.GetString("user_id")
+	identifier := c.Param("id")
+	requestUserID := c.GetString("user_id")
 
 	var req struct {
 		CustomPrompt       string `json:"custom_prompt"`
@@ -611,19 +678,49 @@ func (s *Server) handleUpdateTraderPrompt(c *gin.Context) {
 		return
 	}
 
-	// 更新数据库
-	err := s.database.UpdateTraderCustomPrompt(userID, traderID, req.CustomPrompt, req.OverrideBasePrompt)
+	canonicalID, err := s.traderManager.ResolveTraderID(identifier)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新自定义prompt失败: %v", err)})
-		return
+		canonicalID = identifier
 	}
 
-	// 如果trader在内存中，更新其custom prompt和override设置
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err == nil {
+	ownerID := s.traderManager.GetTraderOwner(canonicalID)
+	if ownerID == "" {
+		ownerID = requestUserID
+	}
+
+	if err := s.database.UpdateTraderCustomPrompt(ownerID, canonicalID, req.CustomPrompt, req.OverrideBasePrompt); err != nil {
+		if ownerID != requestUserID {
+			if fallbackErr := s.database.UpdateTraderCustomPrompt(requestUserID, canonicalID, req.CustomPrompt, req.OverrideBasePrompt); fallbackErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新自定义prompt失败: %v", err)})
+				return
+			}
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新自定义prompt失败: %v", err)})
+			return
+		}
+	}
+
+	if trader, _, err := s.traderManager.GetTraderWithID(identifier); err == nil {
 		trader.SetCustomPrompt(req.CustomPrompt)
 		trader.SetOverrideBasePrompt(req.OverrideBasePrompt)
 		log.Printf("✓ 已更新交易员 %s 的自定义prompt (覆盖基础=%v)", trader.GetName(), req.OverrideBasePrompt)
+	}
+
+	s.traderManager.UpdateTraderConfig(canonicalID, func(cfg *config.TraderRecord) {
+		cfg.CustomPrompt = req.CustomPrompt
+		cfg.OverrideBasePrompt = req.OverrideBasePrompt
+	})
+
+	if s.supabaseClient != nil && ownerID != "" && ownerID != "default" {
+		if cfg := s.traderManager.GetTraderConfig(canonicalID); cfg != nil {
+			cfg.CustomPrompt = req.CustomPrompt
+			cfg.OverrideBasePrompt = req.OverrideBasePrompt
+			go func(owner string, record *config.TraderRecord) {
+				if err := s.supabaseClient.UpsertUserTrader(context.Background(), owner, record); err != nil {
+					log.Printf("❌ 同步交易员自定义prompt到Supabase失败: %v", err)
+				}
+			}(ownerID, cfg)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "自定义prompt已更新"})
@@ -633,7 +730,7 @@ func (s *Server) handleUpdateTraderPrompt(c *gin.Context) {
 func (s *Server) handleGetModelConfigs(c *gin.Context) {
 	userID := c.GetString("user_id")
 	log.Printf("🔍 查询用户 %s 的AI模型配置", userID)
-	models, err := s.database.GetAIModels(userID)
+	models, err := s.getUserAIModels(c.Request.Context(), userID)
 	if err != nil {
 		log.Printf("❌ 获取AI模型配置失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取AI模型配置失败: %v", err)})
@@ -672,14 +769,32 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 
 	// 更新每个模型的配置
 	for modelID, modelData := range req.Models {
-		err := s.database.UpdateAIModel(userID, modelID, modelData.Enabled, modelData.APIKey, modelData.CustomAPIURL, modelData.CustomModelName)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新模型 %s 失败: %v", modelID, err)})
-			return
+		trimmedID := strings.TrimSpace(modelID)
+		modelName, provider := resolveModelMeta(trimmedID)
+		if s.supabaseClient != nil && tgID != "" {
+			model := &config.AIModelConfig{
+				ID:              trimmedID,
+				UserID:          tgID,
+				Name:            modelName,
+				Provider:        provider,
+				Enabled:         modelData.Enabled,
+				APIKey:          modelData.APIKey,
+				CustomAPIURL:    modelData.CustomAPIURL,
+				CustomModelName: modelData.CustomModelName,
+			}
+			if err := s.supabaseClient.UpsertUserAIModel(c.Request.Context(), tgID, model); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新模型 %s 失败: %v", modelID, err)})
+				return
+			}
+		} else {
+			if err := s.database.UpdateAIModel(userID, trimmedID, modelData.Enabled, modelData.APIKey, modelData.CustomAPIURL, modelData.CustomModelName); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新模型 %s 失败: %v", modelID, err)})
+				return
+			}
 		}
 
 		// 将 DeepSeek 密钥同步到 Supabase
-		if strings.EqualFold(modelID, "deepseek") && s.supabaseClient != nil && tgID != "" && strings.TrimSpace(modelData.APIKey) != "" {
+		if strings.EqualFold(trimmedID, "deepseek") && s.supabaseClient != nil && tgID != "" && strings.TrimSpace(modelData.APIKey) != "" {
 			if err := s.supabaseClient.UpsertUserAPIKey(c.Request.Context(), tgID, "deepseek", strings.TrimSpace(modelData.APIKey)); err != nil {
 				log.Printf("❌ 同步DeepSeek密钥到Supabase失败: %v", err)
 			} else {
@@ -689,7 +804,7 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 	}
 
 	// 重新加载该用户的所有交易员，使新配置立即生效
-	err := s.traderManager.LoadUserTraders(s.database, userID)
+	err := s.traderManager.LoadUserTraders(s.database, s.supabaseClient, userID)
 	if err != nil {
 		log.Printf("⚠️ 重新加载用户交易员到内存失败: %v", err)
 		// 这里不返回错误，因为模型配置已经成功更新到数据库
@@ -739,7 +854,7 @@ func (s *Server) handleGetExchangeConfigs(c *gin.Context) {
 		}
 	}
 	log.Printf("🔍 查询用户 %s 的交易所配置", userID)
-	exchanges, err := s.database.GetExchanges(userID)
+	exchanges, err := s.getUserExchanges(c.Request.Context(), userID)
 	if err != nil {
 		log.Printf("❌ 获取交易所配置失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取交易所配置失败: %v", err)})
@@ -778,14 +893,36 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 
 	// 更新每个交易所的配置
 	for exchangeID, exchangeData := range req.Exchanges {
-		err := s.database.UpdateExchange(userID, exchangeID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新交易所 %s 失败: %v", exchangeID, err)})
-			return
+		trimmedID := strings.TrimSpace(exchangeID)
+		exchangeName, exchangeType := resolveExchangeMeta(trimmedID)
+		if s.supabaseClient != nil && tgID != "" {
+			exchangeCfg := &config.ExchangeConfig{
+				ID:                    trimmedID,
+				UserID:                tgID,
+				Name:                  exchangeName,
+				Type:                  exchangeType,
+				Enabled:               exchangeData.Enabled,
+				APIKey:                exchangeData.APIKey,
+				SecretKey:             exchangeData.SecretKey,
+				Testnet:               exchangeData.Testnet,
+				HyperliquidWalletAddr: exchangeData.HyperliquidWalletAddr,
+				AsterUser:             exchangeData.AsterUser,
+				AsterSigner:           exchangeData.AsterSigner,
+				AsterPrivateKey:       exchangeData.AsterPrivateKey,
+			}
+			if err := s.supabaseClient.UpsertUserExchange(c.Request.Context(), tgID, exchangeCfg); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新交易所 %s 失败: %v", exchangeID, err)})
+				return
+			}
+		} else {
+			if err := s.database.UpdateExchange(userID, trimmedID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("更新交易所 %s 失败: %v", exchangeID, err)})
+				return
+			}
 		}
 
-		// 将 Hyperliquid 私钥同步到 Supabase
-		if strings.EqualFold(exchangeID, "hyperliquid") && s.supabaseClient != nil && tgID != "" && strings.TrimSpace(exchangeData.APIKey) != "" {
+		// 将 Hyperliquid 私钥同步到 Supabase 的 user_api_keys 仅用于兼容旧逻辑（保留）
+		if strings.EqualFold(trimmedID, "hyperliquid") && s.supabaseClient != nil && tgID != "" && strings.TrimSpace(exchangeData.APIKey) != "" {
 			if err := s.supabaseClient.UpsertUserAPIKey(c.Request.Context(), tgID, "hyperliquid", strings.TrimSpace(exchangeData.APIKey)); err != nil {
 				log.Printf("❌ 同步Hyperliquid密钥到Supabase失败: %v", err)
 			} else {
@@ -795,7 +932,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	}
 
 	// 重新加载该用户的所有交易员，使新配置立即生效
-	err := s.traderManager.LoadUserTraders(s.database, userID)
+	err := s.traderManager.LoadUserTraders(s.database, s.supabaseClient, userID)
 	if err != nil {
 		log.Printf("⚠️ 重新加载用户交易员到内存失败: %v", err)
 		// 这里不返回错误，因为交易所配置已经成功更新到数据库
@@ -841,7 +978,7 @@ func (s *Server) handleGetUserSignalSource(c *gin.Context) {
 
 // handleSaveUserSignalSource 保存用户信号源配置
 func (s *Server) handleSaveUserSignalSource(c *gin.Context) {
-	userID := c.GetString("user_id")
+	userID := s.resolveRequestUserID(c)
 	var req struct {
 		CoinPoolURL string `json:"coin_pool_url"`
 		OITopURL    string `json:"oi_top_url"`
@@ -917,7 +1054,9 @@ func (s *Server) handleTraderList(c *gin.Context) {
 
 // handleGetTraderConfig 获取交易员详细配置
 func (s *Server) handleGetTraderConfig(c *gin.Context) {
-	userID := c.GetString("user_id")
+	rawUserID := c.GetString("user_id")
+	requestTGID := s.resolveRequestUserID(c)
+
 	traderID := c.Param("id")
 
 	if traderID == "" {
@@ -925,10 +1064,37 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 		return
 	}
 
-	traderConfig, _, _, err := s.database.GetTraderConfig(userID, traderID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("获取交易员配置失败: %v", err)})
-		return
+	userID := rawUserID
+	if requestTGID != "" {
+		userID = requestTGID
+	}
+
+	var traderConfig *config.TraderRecord
+	var err error
+
+	supaUserID := requestTGID
+	if supaUserID == "" && rawUserID == "admin" {
+		if extracted := s.extractTGIDFromTraderID(traderID); extracted != "" {
+			supaUserID = extracted
+		}
+	}
+
+	if s.supabaseClient != nil && supaUserID != "" && supaUserID != "default" {
+		traderConfig, err = s.supabaseClient.GetUserTrader(c.Request.Context(), supaUserID, traderID)
+		if err != nil {
+			log.Printf("⚠️  从Supabase获取交易员配置失败: %v，回退到本地数据库", err)
+		}
+	}
+
+	if traderConfig == nil {
+		traderConfig, _, _, err = s.database.GetTraderConfig(userID, traderID)
+		if err != nil && userID != rawUserID {
+			traderConfig, _, _, err = s.database.GetTraderConfig(rawUserID, traderID)
+		}
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("获取交易员配置失败: %v", err)})
+			return
+		}
 	}
 
 	// 获取实时运行状态
@@ -967,6 +1133,33 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) extractTGIDFromTraderID(traderID string) string {
+	parts := strings.Split(traderID, "-")
+	if len(parts) < 2 {
+		return ""
+	}
+	candidate := parts[1]
+	for _, ch := range candidate {
+		if ch < '0' || ch > '9' {
+			return ""
+		}
+	}
+	return candidate
+}
+
+func (s *Server) resolveRequestUserID(c *gin.Context) string {
+	if tg := strings.TrimSpace(c.Query("tg_id")); tg != "" {
+		return tg
+	}
+	if tg := strings.TrimSpace(c.GetHeader("X-Tg-Id")); tg != "" {
+		return tg
+	}
+	if tg := strings.TrimSpace(c.GetHeader("X-Tgid")); tg != "" {
+		return tg
+	}
+	return c.GetString("user_id")
 }
 
 // handleStatus 系统状态
@@ -1132,7 +1325,7 @@ func (s *Server) handleCompetition(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	// 确保用户的交易员已加载到内存中
-	err := s.traderManager.LoadUserTraders(s.database, userID)
+	err := s.traderManager.LoadUserTraders(s.database, s.supabaseClient, userID)
 	if err != nil {
 		log.Printf("⚠️ 加载用户 %s 的交易员失败: %v", userID, err)
 	}
@@ -1623,6 +1816,64 @@ func (s *Server) handleGetPromptTemplate(c *gin.Context) {
 		"name":    template.Name,
 		"content": template.Content,
 	})
+}
+
+func resolveModelMeta(id string) (name, provider string) {
+	lower := strings.ToLower(id)
+	parts := strings.Split(lower, "_")
+	provider = parts[len(parts)-1]
+	switch provider {
+	case "deepseek":
+		return "DeepSeek", "deepseek"
+	case "qwen":
+		return "Qwen", "qwen"
+	case "claude":
+		return "Claude", "claude"
+	case "custom":
+		return "Custom", "custom"
+	default:
+		return strings.ToUpper(provider), provider
+	}
+}
+
+func resolveExchangeMeta(id string) (name, typ string) {
+	lower := strings.ToLower(id)
+	switch lower {
+	case "binance":
+		return "Binance Futures", "cex"
+	case "hyperliquid":
+		return "Hyperliquid", "dex"
+	case "aster":
+		return "Aster DEX", "dex"
+	case "okx":
+		return "OKX", "cex"
+	default:
+		return strings.ToUpper(id), "cex"
+	}
+}
+
+func (s *Server) getUserAIModels(ctx context.Context, userID string) ([]*config.AIModelConfig, error) {
+	if s.supabaseClient != nil && userID != "" && userID != "default" {
+		models, err := s.supabaseClient.GetUserAIModels(ctx, userID)
+		if err == nil {
+			return models, nil
+		}
+		log.Printf("⚠️  从Supabase获取用户 %s 的AI模型失败: %v，回退到本地数据库", userID, err)
+	}
+
+	return s.database.GetAIModels(userID)
+}
+
+func (s *Server) getUserExchanges(ctx context.Context, userID string) ([]*config.ExchangeConfig, error) {
+	if s.supabaseClient != nil && userID != "" && userID != "default" {
+		exchanges, err := s.supabaseClient.GetUserExchanges(ctx, userID)
+		if err == nil {
+			return exchanges, nil
+		}
+		log.Printf("⚠️  从Supabase获取用户 %s 的交易所配置失败: %v，回退到本地数据库", userID, err)
+	}
+
+	return s.database.GetExchanges(userID)
 }
 
 func (s *Server) ensureTelegramUser(tgID string) error {

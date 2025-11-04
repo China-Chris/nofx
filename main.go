@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/joho/godotenv"
 )
 
 // LeverageConfig 杠杆配置
@@ -111,6 +113,10 @@ func syncConfigToDatabase(database *config.Database) error {
 }
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("⚠️  未找到 .env 文件或加载失败: %v", err)
+	}
+
 	fmt.Println("╔════════════════════════════════════════════════════════════╗")
 	fmt.Println("║    🤖 AI多模型交易系统 - 支持 DeepSeek & Qwen            ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
@@ -203,11 +209,19 @@ func main() {
 		log.Printf("✓ 已配置OI Top API")
 	}
 
+	// 初始化 Supabase 客户端（可选）
+	supabaseClient, err := supabase.NewClientFromEnv()
+	if err != nil {
+		log.Printf("⚠️  初始化Supabase客户端失败或未配置: %v", err)
+	} else {
+		log.Printf("✓ Supabase客户端已初始化")
+	}
+
 	// 创建TraderManager
 	traderManager := manager.NewTraderManager()
 
 	// 从数据库加载所有交易员到内存
-	err = traderManager.LoadTradersFromDatabase(database)
+	err = traderManager.LoadTraders(database, supabaseClient)
 	if err != nil {
 		log.Fatalf("❌ 加载交易员失败: %v", err)
 	}
@@ -254,14 +268,6 @@ func main() {
 		if port, err := strconv.Atoi(apiPortStr); err == nil {
 			apiPort = port
 		}
-	}
-
-	// 初始化 Supabase 客户端（可选）
-	supabaseClient, err := supabase.NewClientFromEnv()
-	if err != nil {
-		log.Printf("⚠️  初始化Supabase客户端失败或未配置: %v", err)
-	} else {
-		log.Printf("✓ Supabase客户端已初始化")
 	}
 
 	// 创建并启动API服务器
